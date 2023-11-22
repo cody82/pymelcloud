@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "pymelcloud"
+version = "2.12.0"
+description = "Python MELCloud interface"
+authors = ["Vilppu Vuorinen <vilppu.jotain@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.8"
+aiohttp = "^3.9.0"
+
+[tool.poetry.group.dev.dependencies]
+asynctest = "^0.13.0"
+pre-commit = "^3.5.0"
+pytest = "^7.4.0"
+pytest-asyncio = "^0.21.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

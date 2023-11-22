@@ -12,6 +12,8 @@ from pymelcloud.client import login as _login
 from pymelcloud.const import DEVICE_TYPE_ATA, DEVICE_TYPE_ATW, DEVICE_TYPE_ERV
 from pymelcloud.device import Device
 
+__email = None
+__password = None
 
 async def login(
     email: str, password: str, session: Optional[ClientSession] = None,
@@ -20,6 +22,10 @@ async def login(
 
     Returns access token.
     """
+    global __email
+    global __password
+    __email = email
+    __password = password
     _client = await _login(email, password, session,)
     return _client.token
 
@@ -46,6 +52,8 @@ async def get_devices(
         session,
         conf_update_interval=conf_update_interval,
         device_set_debounce=device_set_debounce,
+        email=__email,
+        password=__password,
     )
     await _client.update_confs()
     return {

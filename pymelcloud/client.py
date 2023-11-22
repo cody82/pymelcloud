@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from aiohttp import ClientSession
+from aiohttp import ClientResponse, ClientResponseError, ClientSession
 
 BASE_URL = "https://app.melcloud.com/Mitsubishi.Wifi.Client"
 
@@ -76,9 +76,13 @@ class Client:
         user_update_interval=timedelta(minutes=5),
         conf_update_interval=timedelta(seconds=59),
         device_set_debounce=timedelta(seconds=1),
+        email: str|None=None,
+        password: str|None=None,
     ):
         """Initialize MELCloud client."""
         self._token = token
+        self._email = email
+        self._password = password
         if session:
             self._session = session
             self._managed_session = False
@@ -109,41 +113,69 @@ class Client:
         """Return account."""
         return self._account
 
+    async def _login(self):
+        response = await _do_login(self._session, self._email, self._password)
+        self._token = response.get("LoginData").get("ContextKey")
+
+    async def _get(self, url: str) -> Any:
+        for i in range(2):
+            try:
+                async with self._session.get(
+                    url,
+                    headers=_headers(self._token),
+                    raise_for_status=True,
+                ) as resp:
+                    return await resp.json()
+            except ClientResponseError as e:
+                if e.status == 401 and self._email is not None and self._password is not None:
+                    await self._login()
+                else:
+                    raise
+
+    async def _post(self, url: str, json: Dict) -> Any:
+        for i in range(2):
+            try:
+                async with self._session.post(
+                    f"{BASE_URL}/Device/ListDeviceUnits",
+                    headers=_headers(self._token),
+                    json=json,
+                    raise_for_status=True,
+                ) as resp:
+                    return await resp.json()
+            except ClientResponseError as e:
+                if e.status == 401 and self._email is not None and self._password is not None:
+                    await self._login()
+                else:
+                    raise
+    
     async def _fetch_user_details(self):
         """Fetch user details."""
-        async with self._session.get(
-            f"{BASE_URL}/User/GetUserDetails",
-            headers=_headers(self._token),
-            raise_for_status=True,
-        ) as resp:
-            self._account = await resp.json()
+        self._account = await self._get(f"{BASE_URL}/User/GetUserDetails")
 
     async def _fetch_device_confs(self):
         """Fetch all configured devices."""
         url = f"{BASE_URL}/User/ListDevices"
-        async with self._session.get(
-            url, headers=_headers(self._token), raise_for_status=True
-        ) as resp:
-            entries = await resp.json()
-            new_devices = []
-            for entry in entries:
-                new_devices = new_devices + entry["Structure"]["Devices"]
+        
+        entries = await self._get(url)
+        new_devices = []
+        for entry in entries:
+            new_devices = new_devices + entry["Structure"]["Devices"]
 
-                for area in entry["Structure"]["Areas"]:
+            for area in entry["Structure"]["Areas"]:
+                new_devices = new_devices + area["Devices"]
+
+            for floor in entry["Structure"]["Floors"]:
+                new_devices = new_devices + floor["Devices"]
+
+                for area in floor["Areas"]:
                     new_devices = new_devices + area["Devices"]
 
-                for floor in entry["Structure"]["Floors"]:
-                    new_devices = new_devices + floor["Devices"]
-
-                    for area in floor["Areas"]:
-                        new_devices = new_devices + area["Devices"]
-
-            visited = set()
-            self._device_confs = [
-                d
-                for d in new_devices
-                if d["DeviceID"] not in visited and not visited.add(d["DeviceID"])
-            ]
+        visited = set()
+        self._device_confs = [
+            d
+            for d in new_devices
+            if d["DeviceID"] not in visited and not visited.add(d["DeviceID"])
+        ]
 
     async def update_confs(self):
         """Update device_confs and account.
@@ -173,13 +205,10 @@ class Client:
         User provided info such as indoor/outdoor unit model names and
         serial numbers.
         """
-        async with self._session.post(
+        return await self._post(
             f"{BASE_URL}/Device/ListDeviceUnits",
-            headers=_headers(self._token),
             json={"deviceId": device.device_id},
-            raise_for_status=True,
-        ) as resp:
-            return await resp.json()
+        )
 
     async def fetch_device_state(self, device) -> Optional[Dict[Any, Any]]:
         """Fetch state information of a device.
@@ -189,12 +218,9 @@ class Client:
         """
         device_id = device.device_id
         building_id = device.building_id
-        async with self._session.get(
+        return await self._get(
             f"{BASE_URL}/Device/Get?id={device_id}&buildingID={building_id}",
-            headers=_headers(self._token),
-            raise_for_status=True,
-        ) as resp:
-            return await resp.json()
+        )
 
     async def fetch_energy_report(self, device) -> Optional[Dict[Any, Any]]:
         """Fetch energy report containing today and 1-2 days from the past."""
@@ -202,18 +228,15 @@ class Client:
         from_str = (datetime.today() - timedelta(days=2)).strftime("%Y-%m-%d")
         to_str = (datetime.today() + timedelta(days=2)).strftime("%Y-%m-%d")
 
-        async with self._session.post(
+        return await self._post(
             f"{BASE_URL}/EnergyCost/Report",
-            headers=_headers(self._token),
             json={
                 "DeviceId": device_id,
                 "UseCurrency": False,
                 "FromDate": f"{from_str}T00:00:00",
                 "ToDate": f"{to_str}T00:00:00"
             },
-            raise_for_status=True,
-        ) as resp:
-            return await resp.json()
+        )
 
     async def set_device_state(self, device):
         """Update device state.
@@ -231,10 +254,7 @@ class Client:
         else:
             raise ValueError(f"Unsupported device type [{device_type}]")
 
-        async with self._session.post(
+        return await self._post(
             f"{BASE_URL}/Device/{setter}",
-            headers=_headers(self._token),
             json=device,
-            raise_for_status=True,
-        ) as resp:
-            return await resp.json()
+        )
